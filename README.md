@@ -1,1 +1,1 @@
-# RumorDetection
+# Rumor Detection
