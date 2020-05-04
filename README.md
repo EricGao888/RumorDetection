@@ -9,3 +9,6 @@ Preprocessing.py- We add below user properties to the input:
 
 
 *** /nfold_new directory has the new source files with additional features
+
+Model folder in master branchhas the code for pruning the trees based on lenght of the tweets.
+Changes include: construct tree function in the file Function_from_original_author.py
