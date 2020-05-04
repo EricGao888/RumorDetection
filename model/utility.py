@@ -2,6 +2,7 @@ import torch
 import model.TD_RvNN as TD_RvNN
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
 
 dataset = "Twitter16" # choose dataset, you can choose either "Twitter15" or "Twitter16"
 fold = "4" # fold index, choose from 0-4
@@ -10,6 +11,10 @@ treePath = '../resource/data.TD_RvNN.vol_5000.txt'
 trainPath = "../nfold_new/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
 testPath = "../nfold_new/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
 labelPath = "../resource/"+dataset+"_label_All.txt"
+
+MAX_DEPTH = 5
+max_depth_cnt = -1
+max_children_cnt = -1
 
 ################################### tools #####################################
 class Node_tweet(object):
@@ -46,13 +51,47 @@ def gen_nn_inputs(root_node, ini_word):
             np.array(X_index, dtype='int32'),
             np.array(tree, dtype='int32'))
 
+# # without pruning
+# def _get_tree_path(root_node):
+#     global max_depth_cnt
+#     global max_children_cnt
+#     """Get computation order of leaves -> root."""
+#     if root_node.children is None:
+#         return [], [], []
+#     layers = []
+#     layer = [root_node]
+#     depth = 1
+#     while layer:
+#         layers.append(layer[:]) #[[root node], [nodes in 1st layer...], [nodes in 2nd layer...],...]
+#         next_layer = []
+#         [next_layer.extend([child for child in node.children if child])
+#          for node in layer] #1st iter: [nodes in 1st layer], 2nd iter: [nodes in 2nd layer]
+#         layer = next_layer #1st iter: [root], 2nd iter: [nodes in 1st layer], ...
+#         depth += 1
+#     tree = []
+#     word = []
+#     index = []
+#     max_depth_cnt = max(max_depth_cnt, depth)
+#     for layer in layers:
+#         for node in layer:
+#             max_children_cnt = max(max_children_cnt, len(node.children))
+#             if not node.children:
+#                continue
+#             for child in node.children:
+#                 tree.append([node.idx, child.idx]) # [[1st child eid, 1st child index in tree], [2nd child eid, 2nd child index in tree]...]
+#                 word.append(child.word if child.word is not None else -1) # [[wordFreq of 1st child], [wordFreq of 2nd child], ...]
+#                 index.append(child.index if child.index is not None else -1)# [[wordIndex of 1st child], [wordIndex of 2nd child], ...]
+#     return tree, word, index
+
+# prune the tree by depth
 def _get_tree_path(root_node):
     """Get computation order of leaves -> root."""
     if root_node.children is None:
         return [], [], []
     layers = []
     layer = [root_node]
-    while layer:
+    depth = 1
+    while len(layer) > 0 and depth <= MAX_DEPTH:
         layers.append(layer[:]) #[[root node], [nodes in 1st layer...], [nodes in 2nd layer...],...]
         next_layer = []
         [next_layer.extend([child for child in node.children if child])
@@ -64,7 +103,7 @@ def _get_tree_path(root_node):
     for layer in layers:
         for node in layer:
             if not node.children:
-               continue 
+               continue
             for child in node.children:
                 tree.append([node.idx, child.idx]) # [[1st child eid, 1st child index in tree], [2nd child eid, 2nd child index in tree]...]
                 word.append(child.word if child.word is not None else -1) # [[wordFreq of 1st child], [wordFreq of 2nd child], ...]
@@ -185,6 +224,7 @@ def loadData():
         cf_features_train[-1].append(1 if data[4] == 'True' else 0)
         cf_features_train[-1].append(int(data[5]))
         cf_features_train[-1].append(int(data[6]))
+    # print("max children count: %d, max depth count: %d" % (max_children_cnt, max_depth_cnt))
     
     print("loading test set")
     tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test, c = [], [], [], [], [], [], 0
@@ -291,11 +331,23 @@ def evaluation_4class(prediction, y): # 4 dim
     RMSE_all_3 = torch.round( ( RMSE3/len(y) )**0.5*10**n_digits) / (10**n_digits)
     RMSE_all_4 = torch.round( ( RMSE4/len(y) )**0.5*10**n_digits) / (10**n_digits)
     RMSE_all_avg = torch.round( ( RMSE_all_1+RMSE_all_2+RMSE_all_3+RMSE_all_4 )/4*10**n_digits) / (10**n_digits)
-    return ['acc:',Acc_all, 'Favg:',microF, #RMSE_all, RMSE_all_avg,
-            'C1:',Acc1, Prec1, Recll1, F1,
-            'C2:',Acc2, Prec2, Recll2, F2,
-            'C3:',Acc3, Prec3, Recll3, F3,
-            'C4:',Acc4, Prec4, Recll4, F4]
+    # return ['acc:',Acc_all, 'Favg:',microF, #RMSE_all, RMSE_all_avg,
+    #         'C1:',Acc1, Prec1, Recll1, F1,
+    #         'C2:',Acc2, Prec2, Recll2, F2,
+    #         'C3:',Acc3, Prec3, Recll3, F3,
+    #         'C4:',Acc4, Prec4, Recll4, F4]
+    return Acc_all, microF
 
-
+def plot(x, x_label, y_label, title, **ys):
+    fig, ax = plt.subplots()
+    y_values = []
+    for key, value in ys:
+        ax.plot(x, value, label=key, marker='o', markersize=2)
+        y_values.extend(value)
+    ax.set(xlabel=x_label, ylabel=y_label, title=title)
+    ax.set_ylim(0, max(y_values) * 1.1)
+    ax.set_xlim(0, max(x) * 1.1)
+    ax.grid()
+    ax.legend()
+    fig.savefig(title)
 

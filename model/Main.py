@@ -7,42 +7,51 @@ import numpy as np
 import sys
 import torch.optim as optim
 
-Nepoch = 300
+Nepoch = 20
 lr = 0.001 #learning rate
+output_path = '../output/'
 
 if __name__ == "__main__":
     #load data
-    tree_train, word_train, index_train, parent_num_train, cf_features_train, y_train, tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test = original.loadData()
+    tree_train, word_train, index_train, parent_num_train, cf_features_train, y_train, \
+    tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test = original.loadData()
     cf_features_train = np.array(cf_features_train) / np.max(np.array(cf_features_train), axis=0)
     cf_features_test = np.array(cf_features_test) / np.max(np.array(cf_features_test), axis=0)
     print(cf_features_train[0])
     print(cf_features_test[0])
     #initialize model
-    model = TD_RvNN.RvNN()
+    model = TD_RvNN.RvNN(use_cf_features=False)
     #training and testing
     losses = []
+    accuracies = []
+    f1s = []
     for epoch in range(Nepoch):
         optimizer = optim.Adam(model.params, lr)
         # optimizer = optim.SGD(model.params, lr, momentum=0.9)
         for i in range(len(y_train)):
             model.zeroGrad()
-            pred_y = model.compute_tree(word_train[i], index_train[i], parent_num_train[i], tree_train[i], cf_features_train[i])
+            pred_y = model.compute_tree(word_train[i], index_train[i], parent_num_train[i], tree_train[i],
+                                        cf_features_train[i])
             loss = torch.sum((torch.sub(torch.FloatTensor(y_train[i]),pred_y))**2)
             loss.backward()
             optimizer.step()
             losses.append(np.round(loss.detach(),2))
-        print("epoch: {}, loss: {}".format(epoch, np.mean(losses)))
+        print("epoch: {}, loss: {}".format(epoch + 1, np.mean(losses)))
         sys.stdout.flush()
         ## calculate loss and evaluate
-        # if epoch % 5 == 0:
-        time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print("{}: epoch:{}, loss:{}".format(time, epoch, np.mean(losses)))
         sys.stdout.flush()
         prediction = []
         for j in range(len(y_test)):
            pred_y = model.compute_tree(word_test[j], index_test[j], parent_num_test[j], tree_test[j], cf_features_test[j])
            prediction.append(pred_y)
-        result = original.evaluation_4class(prediction, y_test)
-        print('results: {}'.format(result))
+        accuracy, micro_f1 = original.evaluation_4class(prediction, y_test)
+        accuracies.append(accuracy)
+        f1s.append(micro_f1)
+        print("Accuracy: %f, Micro-F1: %f" % (accuracy, micro_f1))
+        # print('results: {}'.format(result))
         sys.stdout.flush()
-
+    time = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+    f = open(output_path + time + ".log", "w")
+    for i in range(Nepoch):
+        f.write("%d %f %f\n" % (i + 1, accuracies[i], f1s[i]))
+    f.close()

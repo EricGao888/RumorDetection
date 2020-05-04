@@ -8,7 +8,7 @@ from torch.nn.utils import clip_grad_norm
 
 ######################################################################
 class RvNN(nn.Module):
-    def __init__(self, word_dim=5000, hidden_dim=100, Nclass=4, num_cf_features=6, use_cf_features=True):
+    def __init__(self, word_dim=5000, hidden_dim=100, Nclass=4, num_cf_features=6, use_cf_features=False):
         super(RvNN, self).__init__()
         assert word_dim > 1 and hidden_dim > 1
         self.hidden_dim = hidden_dim
