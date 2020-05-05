@@ -3,6 +3,7 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import torch.autograd
+import sys
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm
 
@@ -69,9 +70,16 @@ class RvNN(nn.Module):
     def compute_tree(self, x_word, x_index, num_parent, tree, x_cf_features):
         node_h = torch.zeros([len(x_word), 1, self.hidden_dim], dtype=torch.float32)
         child_hs = torch.zeros([len(x_index), 1, self.hidden_dim], dtype=torch.float32)
+        # print(len(x_word))
+        # print(len(tree))
+        assert(len(tree) + 1 == len(x_word))
         for i in range(len(x_index)):
+            # print(x_index[i])
+            # print(x_word[i])
+            # print(tree[i])
             parent_h = node_h[tree[i][0]][0].clone()
             child_h = self.create_recursive_unit(torch.from_numpy(x_word[i]), x_index[i], parent_h)
+            assert(tree[i][1] < node_h.shape[0])
             node_h[tree[i][1]][0] = node_h[tree[i][1]][0].clone()*torch.zeros(child_h.shape)+child_h
             child_hs[i][0] = child_hs[i][0].clone()*torch.zeros(child_h.shape)+child_h
         final_state, _ = child_hs[num_parent-1:][0].max(dim=0)

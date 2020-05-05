@@ -17,8 +17,8 @@ if __name__ == "__main__":
     tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test = original.loadData()
     cf_features_train = np.array(cf_features_train) / np.max(np.array(cf_features_train), axis=0)
     cf_features_test = np.array(cf_features_test) / np.max(np.array(cf_features_test), axis=0)
-    print(cf_features_train[0])
-    print(cf_features_test[0])
+    # print(cf_features_train[0])
+    # print(cf_features_test[0])
     #initialize model
     model = TD_RvNN.RvNN(use_cf_features=False)
     #training and testing
