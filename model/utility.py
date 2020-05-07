@@ -9,14 +9,15 @@ dataset = "Twitter16" # choose dataset, you can choose either "Twitter15" or "Tw
 fold = "4" # fold index, choose from 0-4
 
 treePath = '../resource/data.TD_RvNN.vol_5000.txt'
-trainPath = "../nfold_new/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
-testPath = "../nfold_new/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
+trainPath = "../nfold/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
+testPath = "../nfold/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
 labelPath = "../resource/"+dataset+"_label_All.txt"
 
-MAX_DEPTH = 0
-MIN_CHILDREN = 5
+MAX_DEPTH = float('inf')
+MIN_CHILDREN = 0
 max_depth_cnt = -1
 max_children_cnt = -1
+prune = 'no' # prune = 'depth', prune = 'true'
 
 
 ################################### tools #####################################
@@ -118,7 +119,7 @@ def loadLabel(label, l1, l2, l3, l4):
     return y_train, l1,l2,l3,l4
 
 
-def constructTree(tree, prune=False):
+def constructTree(tree, prune='no'):
     ## tree: {index1:{'parent':, 'maxL':, 'vec':}
     ## 1. ini tree node: create a node with each eid in the tree dictionary
     index2node = {}
@@ -141,8 +142,9 @@ def constructTree(tree, prune=False):
         ## root node ##
         else:
            root = nodeC
-    if prune:
-        # root = prune_tree_by_depth(root)
+    if prune == 'depth':
+        root = prune_tree_by_depth(root)
+    elif prune == 'width':
         root = prune_tree_by_width(root)
     ## 3. convert tree to DNN input    
     parent_num = tree[j]['parent_num']
@@ -198,7 +200,7 @@ def loadData():
         y, l1,l2,l3,l4 = loadLabel(label, l1, l2, l3, l4)
         y_train.append(y)
         ## 2. construct tree
-        x_word, x_index, tree, parent_num = constructTree(treeDic[eid], prune=True)
+        x_word, x_index, tree, parent_num = constructTree(treeDic[eid], prune='no')
         tree_train.append(tree)
         word_train.append(x_word)
         index_train.append(x_index)
