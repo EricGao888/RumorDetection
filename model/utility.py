@@ -9,8 +9,8 @@ dataset = "Twitter16" # choose dataset, you can choose either "Twitter15" or "Tw
 fold = "4" # fold index, choose from 0-4
 
 treePath = '../resource/data.TD_RvNN.vol_5000.txt'
-trainPath = "../nfold/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
-testPath = "../nfold/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
+trainPath = "../nfold_new/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
+testPath = "../nfold_new/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
 labelPath = "../resource/"+dataset+"_label_All.txt"
 
 MAX_DEPTH = float('inf')
