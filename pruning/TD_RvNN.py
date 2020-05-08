@@ -3,16 +3,19 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import torch.autograd
+import sys
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm
 
 ######################################################################
 class RvNN(nn.Module):
-    def __init__(self, word_dim=5000, hidden_dim=100, Nclass=4):
+    def __init__(self, word_dim=5000, hidden_dim=100, Nclass=4, num_cf_features=6, use_cf_features=False):
         super(RvNN, self).__init__()
         assert word_dim > 1 and hidden_dim > 1
         self.hidden_dim = hidden_dim
         self.Nclass = Nclass
+        self.num_cf_features = num_cf_features
+        self.use_cf_features = use_cf_features
         #GRU
         #parameter matrix for transforming input vector of current node
         self.E = self.init_matrix([hidden_dim, word_dim])
@@ -28,7 +31,10 @@ class RvNN(nn.Module):
         self.W_h = self.init_matrix([hidden_dim, hidden_dim])
         self.U_h = self.init_matrix([hidden_dim, hidden_dim])
         self.b_h = torch.FloatTensor(self.init_vector([self.hidden_dim]))
-        # wieght and bias of output
+        self.W_hybrid = self.init_matrix([hidden_dim, hidden_dim + self.num_cf_features])
+        self.b_hybrid = torch.FloatTensor(self.init_vector([self.hidden_dim]))
+        self.act_hybrid = nn.Sigmoid()
+        # weight and bias of output
         self.W_out = torch.FloatTensor(self.init_matrix([self.Nclass, self.hidden_dim]))
         self.b_out = torch.FloatTensor(self.init_vector([self.Nclass]))
         self.params = [self.E.requires_grad_(), self.W_z.requires_grad_(), \
@@ -36,6 +42,7 @@ class RvNN(nn.Module):
                        self.W_r.requires_grad_(), self.U_r.requires_grad_(), \
                        self.b_r.requires_grad_(), self.W_h.requires_grad_(), \
                        self.U_h.requires_grad_(), self.b_h.requires_grad_(),\
+                       self.W_hybrid.requires_grad_(), self.b_hybrid.requires_grad_(),\
                        self.W_out.requires_grad_(), self.b_out.requires_grad_()]
 
     def init_matrix(self, shape):
@@ -60,16 +67,33 @@ class RvNN(nn.Module):
         h = (1-z)*parent_h + z*c
         return h #hidden state computed for current node
 
-    def compute_tree(self, x_word, x_index, num_parent, tree):
+    def compute_tree(self, x_word, x_index, num_parent, tree, x_cf_features):
         node_h = torch.zeros([len(x_word), 1, self.hidden_dim], dtype=torch.float32)
         child_hs = torch.zeros([len(x_index), 1, self.hidden_dim], dtype=torch.float32)
+        # print(len(x_word))
+        # print(len(tree))
+        assert(len(tree) + 1 == len(x_word))
         for i in range(len(x_index)):
+            # print(x_index[i])
+            # print(x_word[i])
+            # print(tree[i])
             parent_h = node_h[tree[i][0]][0].clone()
             child_h = self.create_recursive_unit(torch.from_numpy(x_word[i]), x_index[i], parent_h)
+            assert(tree[i][1] < node_h.shape[0])
             node_h[tree[i][1]][0] = node_h[tree[i][1]][0].clone()*torch.zeros(child_h.shape)+child_h
             child_hs[i][0] = child_hs[i][0].clone()*torch.zeros(child_h.shape)+child_h
         final_state, _ = child_hs[num_parent-1:][0].max(dim=0)
-        pred_y = F.softmax(torch.matmul(self.W_out, final_state) + self.b_out, dim=0)
+        x_cf_features = torch.Tensor(x_cf_features)
+        final_input = torch.cat((final_state, x_cf_features))
+        # print(final_input)
+        # print(final_input.shape)
+        if self.use_cf_features:
+            h = torch.matmul(self.W_hybrid, final_input) + self.b_hybrid
+            a = self.act_hybrid(h)
+            pred_y = F.softmax(torch.matmul(self.W_out, a) + self.b_out, dim=0)
+        else:
+            pred_y = F.softmax(torch.matmul(self.W_out, final_state) + self.b_out, dim=0)
+
         return pred_y
 
     def forwardM(self, updates):
@@ -98,6 +122,10 @@ class RvNN(nn.Module):
             self.U_h.grad.zero_()
         if self.b_h.grad is not None:
             self.b_h.grad.zero_()
+        if self.W_hybrid.grad is not None:
+            self.W_hybrid.grad.zero_()
+        if self.b_hybrid.grad is not None:
+            self.b_hybrid.grad.zero_()
         if self.W_out.grad is not None:
             self.W_out.grad.zero_()
         if self.b_out.grad is not None:

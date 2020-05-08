@@ -1,15 +1,28 @@
 import torch
-import TD_RvNN as TD_RvNN
+import pruning.TD_RvNN as TD_RvNN
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
+from queue import Queue
 
 dataset = "Twitter16" # choose dataset, you can choose either "Twitter15" or "Twitter16"
 fold = "4" # fold index, choose from 0-4
 
 treePath = '../resource/data.TD_RvNN.vol_5000.txt'
-trainPath = "../nfold/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
-testPath = "../nfold/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
+trainPath = "../nfold_new/RNNtrainSet_"+dataset+str(fold)+"_tree.txt"
+testPath = "../nfold_new/RNNtestSet_"+dataset+str(fold)+"_tree.txt"
 labelPath = "../resource/"+dataset+"_label_All.txt"
+
+prune = 'no' # prune = 'depth', prune = 'width', prune = 'text'
+
+MAX_DEPTH = 1
+MIN_CHILDREN = 0
+MIN_TEXT_LEN = 10
+
+max_depth_cnt = -1
+max_children_cnt = -1
+
+
 
 ################################### tools #####################################
 class Node_tweet(object):
@@ -19,7 +32,8 @@ class Node_tweet(object):
         self.word = [] #wordFrequent
         self.index = [] #wordIndex
         self.parent = None #parent of current node
-        
+
+
 # generate tree structure
 def gen_nn_inputs(root_node, ini_word):
     """Given a root node, returns the appropriate inputs to NN.
@@ -46,12 +60,17 @@ def gen_nn_inputs(root_node, ini_word):
             np.array(X_index, dtype='int32'),
             np.array(tree, dtype='int32'))
 
+
+# without pruning
 def _get_tree_path(root_node):
+    global max_depth_cnt
+    global max_children_cnt
     """Get computation order of leaves -> root."""
     if root_node.children is None:
         return [], [], []
     layers = []
     layer = [root_node]
+    depth = 1
     while layer:
         layers.append(layer[:]) #[[root node], [nodes in 1st layer...], [nodes in 2nd layer...],...]
         next_layer = []
@@ -61,15 +80,18 @@ def _get_tree_path(root_node):
     tree = []
     word = []
     index = []
+    max_depth_cnt = max(max_depth_cnt, depth)
     for layer in layers:
         for node in layer:
+            max_children_cnt = max(max_children_cnt, len(node.children))
             if not node.children:
-               continue 
+               continue
             for child in node.children:
                 tree.append([node.idx, child.idx]) # [[1st child eid, 1st child index in tree], [2nd child eid, 2nd child index in tree]...]
                 word.append(child.word if child.word is not None else -1) # [[wordFreq of 1st child], [wordFreq of 2nd child], ...]
                 index.append(child.index if child.index is not None else -1)# [[wordIndex of 1st child], [wordIndex of 2nd child], ...]
     return tree, word, index
+
 
 def str2matrix(Str, MaxL): # str is wordIndex : wordfreq
     wordFreq, wordIndex = [], []
@@ -82,6 +104,7 @@ def str2matrix(Str, MaxL): # str is wordIndex : wordfreq
     wordFreq += ladd 
     wordIndex += ladd
     return wordFreq, wordIndex 
+
 
 def loadLabel(label, l1, l2, l3, l4):
     labelset_nonR, labelset_f, labelset_t, labelset_u = ['news', 'non-rumor'], ['false'], ['true'], ['unverified']
@@ -99,7 +122,8 @@ def loadLabel(label, l1, l2, l3, l4):
        l4 += 1
     return y_train, l1,l2,l3,l4
 
-def constructTree(tree):
+
+def constructTree(tree, prune='no'):
     ## tree: {index1:{'parent':, 'maxL':, 'vec':}
     ## 1. ini tree node: create a node with each eid in the tree dictionary
     index2node = {}
@@ -116,26 +140,34 @@ def constructTree(tree):
         nodeC.word = wordFreq
         ## not root node ##
         if not indexP == 'None':
-           nodeP = index2node[int(indexP)]
-           nodeC.parent = nodeP
-           if len(tree[j]['vec'].split( )) <= 10:
-                 nodeC.index=[ 0 ]*(tree[j]['maxL'])
-                 nodeC.word = [ 0 ]*(tree[j]['maxL'])
-		         #nodeC.word =[]
-           nodeP.children.append(nodeC)
+            nodeP = index2node[int(indexP)]
+            nodeC.parent = nodeP
+            if prune == 'text':
+                if len(tree[j]['vec'].split( )) <= MIN_TEXT_LEN:
+                    nodeC.index=[ 0 ]*(tree[j]['maxL'])
+                    nodeC.word = [ 0 ]*(tree[j]['maxL'])
+            nodeP.children.append(nodeC)
         ## root node ##
         else:
-           root = nodeC
+            root = nodeC
+    if prune == 'depth':
+        root = prune_tree_by_depth(root)
+    elif prune == 'width':
+        root = prune_tree_by_width(root)
     ## 3. convert tree to DNN input    
     parent_num = tree[j]['parent_num']
     iniVec, _ = str2matrix( "0:0", tree[j]['maxL'] )
     x_word, x_index, tree = gen_nn_inputs(root, iniVec)
+    if len(x_index) != len(tree):
+        print("Error")
+        sys.stdout.flush()
     """
     tree: list of eid list in tree order
     X_word: list of word frequent list in tree order
     X_index: list of word index list in tree order
     """
     return x_word, x_index, tree, parent_num
+
 
 def loadData():
     print("loading tree label")
@@ -161,34 +193,51 @@ def loadData():
     print('tree length: {}'.format(len(treeDic)))
     
     print("loading train set")
-    tree_train, word_train, index_train, y_train, parent_num_train, c = [], [], [], [], [], 0
+    tree_train, word_train, index_train, y_train, parent_num_train, cf_features_train, c = [], [], [], [], [], [], 0
     l1,l2,l3,l4 = 0,0,0,0
-    with open(trainPath, 'r') as f:
-        for eid in f.readlines():
-            eid = eid.rstrip()
-            if eid not in labelDic: continue
-            if eid not in treeDic: continue
-            if len(treeDic[eid]) <= 0: continue
-            ## 1. load label
-            label = labelDic[eid]
-            y, l1,l2,l3,l4 = loadLabel(label, l1, l2, l3, l4)
-            y_train.append(y)
-            ## 2. construct tree
-            x_word, x_index, tree, parent_num = constructTree(treeDic[eid])
-            tree_train.append(tree)
-            word_train.append(x_word)
-            index_train.append(x_index)
-            parent_num_train.append(parent_num)
-    
-    print("loading test set")
-    tree_test, word_test, index_test, parent_num_test, y_test, c = [], [], [], [], [], 0
-    l1,l2,l3,l4 = 0,0,0,0
-    for eid in open(testPath):
-        eid = eid.rstrip()
+    for line in open(trainPath):
+        line = line.rstrip()
+        data = line.split(' ')
+        eid = data[0]
         if eid not in labelDic: continue
         if eid not in treeDic: continue
-        if len(treeDic[eid]) <= 0:
-           continue        
+        if len(treeDic[eid]) < 2: continue  # Exclude trees with only root
+        if data[1] == 'UNK': continue
+        ## 1. load label
+        label = labelDic[eid]
+        y, l1,l2,l3,l4 = loadLabel(label, l1, l2, l3, l4)
+        y_train.append(y)
+        ## 2. construct tree
+        x_word, x_index, tree, parent_num = constructTree(treeDic[eid], prune='no')
+        tree_train.append(tree)
+        word_train.append(x_word)
+        index_train.append(x_index)
+        parent_num_train.append(parent_num)
+        ## 3. load cf features
+        cf_features_train.append([])
+        cf_features_train[-1].append(int(data[1]))
+        cf_features_train[-1].append(int(data[2]))
+        cf_features_train[-1].append(float(data[3]))
+        cf_features_train[-1].append(1 if data[4] == 'True' else 0)
+        cf_features_train[-1].append(int(data[5]))
+        cf_features_train[-1].append(int(data[6]))
+    # print("max children count: %d, max depth count: %d" % (max_children_cnt, max_depth_cnt))
+    
+    print("loading test set")
+    tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test, c = [], [], [], [], [], [], 0
+    l1,l2,l3,l4 = 0,0,0,0
+    # read new data
+    for line in open(testPath):
+        #if c > 4: break
+        line = line.rstrip()
+        data = line.split(' ')
+        eid = data[0]
+        if eid not in labelDic: continue
+        if eid not in treeDic: continue
+        if len(treeDic[eid]) < 2: continue
+        if data[1] == 'UNK': continue
+        ## 1. load label
+        label = labelDic[eid]
         ## 1. load label        
         label = labelDic[eid]
         y, l1,l2,l3,l4 = loadLabel(label, l1, l2, l3, l4)
@@ -199,7 +248,17 @@ def loadData():
         word_test.append(x_word)  
         index_test.append(x_index) 
         parent_num_test.append(parent_num)
-    return tree_train, word_train, index_train, parent_num_train, y_train, tree_test, word_test, index_test, parent_num_test, y_test
+        ## 3. load cf cf_features
+        cf_features_test.append([])
+        cf_features_test[-1].append(int(data[1]))
+        cf_features_test[-1].append(int(data[2]))
+        cf_features_test[-1].append(float(data[3]))
+        cf_features_test[-1].append(1 if data[4] == 'True' else 0)
+        cf_features_test[-1].append(int(data[5]))
+        cf_features_test[-1].append(int(data[6]))
+
+    return tree_train, word_train, index_train, parent_num_train, cf_features_train, y_train, tree_test, word_test, index_test, parent_num_test, cf_features_test, y_test
+
 
 def evaluation_4class(prediction, y): # 4 dim
     TP1, FP1, FN1, TN1 = 0, 0, 0, 0 #news, nonRumor
@@ -270,11 +329,59 @@ def evaluation_4class(prediction, y): # 4 dim
     RMSE_all_3 = torch.round( ( RMSE3/len(y) )**0.5*10**n_digits) / (10**n_digits)
     RMSE_all_4 = torch.round( ( RMSE4/len(y) )**0.5*10**n_digits) / (10**n_digits)
     RMSE_all_avg = torch.round( ( RMSE_all_1+RMSE_all_2+RMSE_all_3+RMSE_all_4 )/4*10**n_digits) / (10**n_digits)
-    return ['acc:',Acc_all, 'Favg:',microF, #RMSE_all, RMSE_all_avg,
-            'C1:',Acc1, Prec1, Recll1, F1,
-            'C2:',Acc2, Prec2, Recll2, F2,
-            'C3:',Acc3, Prec3, Recll3, F3,
-            'C4:',Acc4, Prec4, Recll4, F4]
+    # return ['acc:',Acc_all, 'Favg:',microF, #RMSE_all, RMSE_all_avg,
+    #         'C1:',Acc1, Prec1, Recll1, F1,
+    #         'C2:',Acc2, Prec2, Recll2, F2,
+    #         'C3:',Acc3, Prec3, Recll3, F3,
+    #         'C4:',Acc4, Prec4, Recll4, F4]
+    return Acc_all, microF
 
 
+def plot(x, x_label, y_label, title, **ys):
+    fig, ax = plt.subplots()
+    y_values = []
+    for key, value in ys:
+        ax.plot(x, value, label=key, marker='o', markersize=2)
+        y_values.extend(value)
+    ax.set(xlabel=x_label, ylabel=y_label, title=title)
+    ax.set_ylim(0, max(y_values) * 1.1)
+    ax.set_xlim(0, max(x) * 1.1)
+    ax.grid()
+    ax.legend()
+    fig.savefig(title)
 
+
+def prune_tree_by_depth(root):
+    queue = Queue()
+    queue.put(root)
+    depth = 1
+    while not queue.empty():
+        size = queue.qsize()
+        while size > 0:
+            node = queue.get()
+            size -= 1
+            if depth > MAX_DEPTH:
+                node.word = [0 for i in range(len(node.word))]
+                node.index = [0 for i in range(len(node.index))]
+            if node.children:
+                [queue.put(child) for child in node.children]
+        depth += 1
+    return root
+
+
+def prune_tree_by_width(root):
+    queue = Queue()
+    queue.put(root)
+    depth = 0
+    while not queue.empty():
+        size = queue.qsize()
+        while size > 0:
+            node = queue.get()
+            size -= 1
+            if len(node.children) < MIN_CHILDREN:
+                node.word = [0 for i in range(len(node.word))]
+                node.index = [0 for i in range(len(node.index))]
+            if node.children:
+                [queue.put(child) for child in node.children]
+        depth += 1
+    return root
