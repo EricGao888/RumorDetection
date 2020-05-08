@@ -1,7 +1,6 @@
-#
-attention version 
+# attention version 
 
-##
+## Data
 download the dataset from the link
 data process: under /dataset 
 twitter15_new and twitter16_new has the data  which is same for Tree Structure
