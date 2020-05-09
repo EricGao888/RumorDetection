@@ -41,7 +41,7 @@ We develop our code based on the previous work of following github repo:
 # Attention version 
 
 ## Data
-* download the dataset from the link and put it under the RumorDetection folder
+* download the dataset from the link and put it under the attention folder
 * data process: 
 under /dataset, twitter15_new and twitter16_new has the data  which has same records with Tree Structure but the format is different
 * process.py load the data from the twitter15_new and twitter16_new to pickle file which is used in run.py
