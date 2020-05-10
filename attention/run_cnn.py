@@ -17,9 +17,10 @@ def load_dataset(task):
     X_train_tid, X_train, y_train, word_embeddings = pickle.load(open("dataset/"+task+"/train_new.pkl", 'rb'))
     #X_dev_tid, X_dev, y_dev = pickle.load(open("dataset/"+task+"/dev_new.pkl", 'rb'))
     X_test_tid, X_test, y_test = pickle.load(open("dataset/"+task+"/test_new.pkl", 'rb'))
+    relation = pickle.load(open("dataset/"+task+"/relationship.pkl", 'rb'))
     
     return X_train, y_train, \
-           X_test, y_test, word_embeddings
+           X_test, y_test, word_embeddings, relation, X_train_tid, X_test_tid
 
 
 def modifyFormat(X_train):
@@ -61,9 +62,38 @@ def buildEmbeddingAndIdx(sentences):
     for idx, elem in enumerate(list_set):
         valuetoidx[elem] = idx
 
-    embedding = np.zeros(shape=(len(valuetoidx), 50), dtype='float32')
+    embedding = np.zeros(shape=(len(valuetoidx), 25), dtype='float32')
 
     return embedding, valuetoidx
+
+
+def relationinput(X, relation_idx, tiddic, tiddic_inv):
+
+    
+    x = [] 
+    no_record = 0
+    for key in X:
+        tmp = []
+        orin_key = tiddic_inv[key]
+        try:
+            for tid in relation_idx[orin_key]:
+                tmp.append(tiddic[tid])
+            x.append(tmp)
+        except:
+            x.append([0]*50)
+
+    max_len = 50
+    X_pad = []
+    for doc in x:
+        if len(doc) >= max_len:
+            doc = doc[:max_len]
+        else:
+            doc = [0] * (max_len - len(doc)) + doc
+        X_pad.append(doc)
+    
+    return  torch.LongTensor(X_pad)
+
+
 
 
 def train_and_test(task):
@@ -77,9 +107,10 @@ def train_and_test(task):
 
             self.word_embedding = nn.Embedding(V, D, padding_idx=0, _weight=torch.from_numpy(embedding_weights))
 
+
             embedding_weights = follow_embeddings
             V, D = embedding_weights.shape
-            print
+            
             self.follow_embeddings = nn.Embedding(V, D, padding_idx=0, _weight=torch.from_numpy(embedding_weights))
 
             embedding_weights = friend_embeddings
@@ -102,6 +133,13 @@ def train_and_test(task):
             V, D = embedding_weights.shape
             self.tweets_embeddings = nn.Embedding(V, D, padding_idx=0, _weight=torch.from_numpy(embedding_weights))
 
+        
+            embedding_weights = relation_embeddings
+            V, D = embedding_weights.shape
+            self.relation_embeddings = nn.Embedding(V, D, padding_idx=0, _weight=torch.from_numpy(embedding_weights))
+
+
+
 
             self.n_heads = n_heads
             self.d_k = d_k if d_k is not None else input_size
@@ -116,24 +154,31 @@ def train_and_test(task):
             self.W_v = nn.Parameter(torch.Tensor(input_size, n_heads * d_v))
 
             self.W_o = nn.Parameter(torch.Tensor(d_v*n_heads, input_size))
+            self.relation_pooling = nn.MaxPool1d(kernel_size=50)
+            self.text_pooling = nn.MaxPool1d(kernel_size=300)
+            self.avg_pooling = nn.AvgPool1d(kernel_size=6)
 
-            self.filter_num_width = [(25, 1), (50, 2)]
-            self.convolutions = []
-            for out_channel, filter_width in self.filter_num_width:
-                self.convolutions.append(
-                    nn.Conv2d(
-                        1,           # in_channel
-                        out_channel, # out_channel
-                        kernel_size=(50, filter_width), # (height, width)
-                        bias=True
-                    )
-            )
+            self.convs = nn.ModuleList([nn.Conv1d(50, 10, kernel_size=K) for K in [3,4,5]])
+            self.max_poolings = nn.ModuleList([nn.MaxPool1d(kernel_size=50 - K + 1) for K in [3,4,5]])
+
+
+            #self.filter_num_width = [(25, 1), (50, 2)]
+            #self.convolutions = []
+            #for out_channel, filter_width in self.filter_num_width:
+            #    self.convolutions.append(
+            #        nn.Conv2d(
+            #            1,           # in_channel
+            #            out_channel, # out_channel
+            #            kernel_size=(50, filter_width), # (height, width)
+            #            bias=True
+            #        )
+            #)
             self.linear1 = nn.Linear(input_size, input_size)
             self.linear2 = nn.Linear(input_size, input_size)
 
             self.dropout = nn.Dropout(attn_dropout)
             self.relu = nn.ReLU()
-            self.fc1 = nn.Linear(125, 50)
+            self.fc1 = nn.Linear(180, 50)
             self.fc2 = nn.Linear(50, 4)
             self.__init_weights__()
             print(self)
@@ -214,6 +259,7 @@ def train_and_test(task):
             X_verified = self.verified_embeddings(X_train[4]) 
             X_registration = self.registration_embeddings(X_train[5]) 
             X_tweets = self.tweets_embeddings(X_train[6]) 
+            X_relations = self.relation_embeddings(X_train[7]) 
             
             V_att = self.multi_head_attention(X_text, X_text, X_text)
 
@@ -224,25 +270,36 @@ def train_and_test(task):
                 X = X_text + V_att
                 output = self.FFN(X) + X
         
-            #output =torch.mean(output, dim=1, keepdim=True)
-            X_text = output.permute(0, 2, 1)
-            information = torch.cat((X_follow, X_friend,X_ratio,X_verified, X_registration,X_tweets), dim=1)
-            information = torch.transpose(information.view(information.size()[0], 1, information.size()[1], -1), 2, 3)
-            conv_feature = self.conv_layers(information)
-            X_text = torch.mean(X_text, dim=1)
-            feature = torch.cat((conv_feature, X_text), dim=1)
+            X_relations = self.relation_pooling(X_relations)
+
+            information = torch.cat((X_follow, X_friend,X_ratio,X_verified, X_registration,X_tweets), dim=2)
+
+            output = self.text_pooling(output)
+        
+            output = torch.bmm(output, X_relations.permute(0,2,1))
+            #print(X_text.shape)
+            #print(output.shape)
+            conv_block = []
+            for _, (Conv, max_pooling) in enumerate(zip(self.convs, self.max_poolings)):
+                act = self.relu(Conv(output))
+                pool = max_pooling(act)
+                pool = torch.squeeze(pool)
+                conv_block.append(pool)
+
+            conv_feature = torch.cat(conv_block, dim=1)
             
-            #print(feature.shape)
-            a1 = self.relu(self.fc1(feature))
+            #conv_feature = torch.mean(conv_feature, dim=1)
+            conv_feature = torch.cat((conv_feature, information.squeeze()), dim=1)
+
+            a1 = self.relu(self.fc1(conv_feature))
             d1 = self.dropout(a1)
 
             output = self.fc2(d1)
-
-            #print(output.shape)
+    
             return output
 
     X_train, y_train, \
-    X_test, y_test, word_embeddings = load_dataset(task)
+    X_test, y_test, word_embeddings, relation, X_train_tid, X_test_tid = load_dataset(task)
 
     X_text = torch.LongTensor(X_train[0])
     y_train = torch.LongTensor(y_train)
@@ -252,7 +309,17 @@ def train_and_test(task):
 
     X_train = modifyFormat(X_train)
     X_test = modifyFormat(X_test)
+
+
+    tiddic_inv = pickle.load(open("dataset/twitter16_new/tiddic_inv.pkl", 'rb'))
+    tiddic = pickle.load(open("dataset/twitter16_new/tiddic.pkl", 'rb'))
+
+    relation_embeddings = np.zeros(shape=(len(tiddic)+1, 50), dtype='float32')
+
+    X_relation = relationinput(X_train_tid, relation, tiddic, tiddic_inv )
+    X_test_relation = relationinput(X_test_tid, relation, tiddic,tiddic_inv )
     
+
     follow_embeddings, follow_idx = buildEmbeddingAndIdx(X_train[0]+X_test[0])
     friend_embeddings, friend_idx = buildEmbeddingAndIdx(X_train[1]+X_test[1])
     ratio_embeddings, ratio_idx = buildEmbeddingAndIdx(X_train[2]+X_test[2])
@@ -268,11 +335,11 @@ def train_and_test(task):
     batch_size = 64
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
-    dataset = TensorDataset(X_text, X_follow, X_friend, X_ratio, X_verified, X_registration, X_tweets, y_train)
+    dataset = TensorDataset(X_text, X_follow, X_friend, X_ratio, X_verified, X_registration, X_tweets, X_relation,  y_train)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     loss_func = nn.CrossEntropyLoss()
-    epochs_num = 10
+    epochs_num = 50
     for epoch in range(epochs_num):
         print("\nEpoch ", epoch+1, "/", epochs_num)
         model.train()
@@ -280,10 +347,10 @@ def train_and_test(task):
         avg_acc = 0
         for i, data in enumerate(dataloader):
             with torch.no_grad():
-                batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets, batch_y = (item.cpu() for item in data)
+                batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets, batch_x_relation, batch_y = (item.cpu() for item in data)
             
 
-            logit = model([batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets])
+            logit = model([batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets, batch_x_relation])
             loss = loss_func(logit, batch_y)
             loss.backward()
             optimizer.step()
@@ -291,11 +358,7 @@ def train_and_test(task):
             corrects = (torch.max(logit, 1)[1].view(batch_y.size()).data == batch_y.data).sum()
             accuracy = 100*corrects/len(batch_y)
 
-            #print('Batch[{}] - loss: {:.6f}  acc: {:.4f}%({}/{})'.format(i, loss.item(), accuracy, corrects, batch_y.size(0)))
-            if i > 0 and i % 100 == 0:
-                evaluate(model, X_dev_text, X_dev_follow, X_dev_friend, X_dev_ratio, X_dev_verified, X_dev_registration, X_dev_tweets, y_dev)
-                model.train()
-
+    
             avg_loss += loss.item()
             avg_acc += accuracy
 
@@ -303,7 +366,7 @@ def train_and_test(task):
         #evaluate(model, X_dev, y_dev)
 
         print("test part")
-        y_pred = predict(model, X_test_text, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets)
+        y_pred = predict(model, X_test_text, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets, X_test_relation)
         
         print(accuracy_score(y_test, y_pred))
 '''
@@ -318,25 +381,25 @@ config = {
 }
 '''
 
-def evaluate(model, X_dev, X_dev_follow, X_dev_friend, X_dev_ratio, X_dev_verified, X_dev_registration, X_dev_tweets, y_dev):
-    y_pred = predict(model, X_dev, X_dev_follow, X_dev_friend, X_dev_ratio, X_dev_verified, X_dev_registration, X_dev_tweets)
+def evaluate(model, X_dev, X_dev_follow, X_dev_friend, X_dev_ratio, X_dev_verified, X_dev_registration, X_dev_tweets, X_dev_relation, y_dev):
+    y_pred = predict(model, X_dev, X_dev_follow, X_dev_friend, X_dev_ratio, X_dev_verified, X_dev_registration, X_dev_tweets, X_dev_relation)
     acc = accuracy_score(y_dev, y_pred)
     #print(classification_report(y_dev, y_pred, digits=5))
     print(acc)
 
 
-def predict(model, X_test, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets):
+def predict(model, X_test, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets, X_test_relation):
 
     model.eval()
     y_pred = []
     X_test = torch.LongTensor(X_test)
-    dataset = TensorDataset(X_test, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets)
+    dataset = TensorDataset(X_test, X_test_follow, X_test_friend, X_test_ratio, X_test_verified, X_test_registration, X_test_tweets, X_test_relation)
     dataloader = DataLoader(dataset, batch_size=50)
 
     for i, data in enumerate(dataloader):
         with torch.no_grad():
-            batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets = (item.cpu() for item in data)
-            logits = model([batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets])
+            batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets, batch_x_relation  = (item.cpu() for item in data)
+            logits = model([batch_x_text, batch_x_follow, batch_x_friend, batch_x_ratio, batch_x_verified, batch_x_registration, batch_x_tweets, batch_x_relation])
             predicted = torch.max(logits, dim=1)[1]
             y_pred += predicted.data.cpu().numpy().tolist()
     return y_pred
@@ -345,8 +408,8 @@ def predict(model, X_test, X_test_follow, X_test_friend, X_test_ratio, X_test_ve
 
 
 if __name__ == '__main__':
-    task = 'twitter15'
-    # task = 'twitter16'
+    #task = 'twitter15'
+    task = 'twitter16'
     print("task: ", task+"_new")
     train_and_test(task+"_new")
 
