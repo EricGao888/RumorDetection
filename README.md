@@ -43,8 +43,8 @@ We develop our code based on the previous work of following github repo:
 ## Data
 * download the dataset from the link and put it under the attention folder
 * data process: 
-under /dataset, twitter15_new and twitter16_new has the data  which has same records with Tree Structure but the format is different
-* process.py load the data from the twitter15_new and twitter16_new to pickle file which is used in run.py
+under /dataset, twitter16_new has the data  which has same records with Tree Structure but the format is different
+* process.py under the dataset folder load the data from the twitter16_new to pickle file which is used in run.py
 * [dataset](https://1drv.ms/u/s!ApBEiUtUqBjHzBdZn_bSE-GfA1Vd?e=aSRSWy)
 ## Run
 * python run.py => this is only attention version.  The main file
@@ -53,4 +53,5 @@ under /dataset, twitter15_new and twitter16_new has the data  which has same rec
 ## Reference
 The code is modified from
 https://github.com/chunyuanY/RumorDetection
+
 
